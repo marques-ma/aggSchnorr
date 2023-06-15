@@ -71,7 +71,8 @@ func Hash(s string) kyber.Scalar {
 }
 
 // ------------------------------------ //
-func aggSig(sigA, sigB Signature, pubKeyA, pubKeyB kyber.Point) (Signature, kyber.Point) {
+// Generate a multi-signature given 2 signatures and the corresponding public keys
+func mulSig(sigA, sigB Signature, pubKeyA, pubKeyB kyber.Point) (Signature, kyber.Point) {
 	newR := curve.Point().Add(sigA.R, sigB.R)
 	newS := curve.Scalar().Add(sigA.S, sigB.S)
 	newPubKey := curve.Point().Add(pubKeyA, pubKeyB)
@@ -99,6 +100,7 @@ func main() {
 	aggPubKey := curve.Point().Add(pk1, pk2)
 
 	// Create the hash with aggregated Public Key
+	// TODO: This way it is vulnerable to rogue-key. Add r in hash.
 	h := Hash(message + aggPubKey.String())
 
 	// Generate signatures
@@ -113,11 +115,11 @@ func main() {
 		fmt.Println("Success verifying partial signatures!")
 	}
 
-	// Aggregate signatures
-	aggSig, aggPubKey := aggSig(sig1, sig2, pk1, pk2)
+	// Multi-signature construction
+	mulSig, aggPubKey := mulSig(sig1, sig2, pk1, pk2)
 
 	// validate aggregated signature
-	if !Verify(h, aggSig, aggPubKey) {
+	if !Verify(h, mulSig, aggPubKey) {
 		fmt.Println("Failed verifying aggregated signature!")
 		return
 	} else {
@@ -128,6 +130,6 @@ func main() {
 	fmt.Println("Message: ", message)
 	fmt.Println("Sig1   : ", sig1)
 	fmt.Println("Sig2   : ", sig2)
-	fmt.Println("AggSig : ", aggSig)
+	fmt.Println("MulSig : ", mulSig)
 	fmt.Println("AggPubK: ", aggPubKey)
 }
