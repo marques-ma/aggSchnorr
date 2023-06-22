@@ -4,12 +4,19 @@ import (
 	"fmt"
 	"go.dedis.ch/kyber/v3"
 	"go.dedis.ch/kyber/v3/group/edwards25519"
+
+	"crypto/ecdsa"
+	"crypto/rand"
+	"crypto/elliptic"
+	"math/big"
 )
 
 // Set parameters
-var curve = edwards25519.NewBlakeSHA256Ed25519()
-var sha256 = curve.Hash()
-var g = curve.Point().Base()
+var (
+	curve = edwards25519.NewBlakeSHA256Ed25519()
+	sha256 = curve.Hash()
+	g = curve.Point().Base()
+)
 
 type Signature struct {
     R kyber.Point
@@ -70,6 +77,14 @@ func Hash(s string) kyber.Scalar {
     return curve.Scalar().SetBytes(sha256.Sum(nil))
 }
 
+// Given private key in big.Int, return its hash as Scalar
+func convKey(d *big.Int) kyber.Scalar {
+    sha256.Reset()
+    sha256.Write(d.Bytes())
+
+    return curve.Scalar().SetBytes(sha256.Sum(nil))
+}
+
 // ------------------------------------ //
 // Generate a multi-signature given 2 signatures and the corresponding public keys
 func mulSig(sigA, sigB Signature, pubKeyA, pubKeyB kyber.Point) (Signature, kyber.Point) {
@@ -89,36 +104,59 @@ func mulSig(sigA, sigB Signature, pubKeyA, pubKeyB kyber.Point) (Signature, kybe
 
 func main() {
 	message := "message-2b-signed"
-
-	// Generate Keypair 1
+	fmt.Println("Message: ", message)
+	fmt.Printf("\n------------- Key generation -------------\n")
+	// Generate EdDSA Keypair
 	sk1, pk1 := RandomKeyPair()
+	fmt.Printf("key pair 1: %v %v\n", sk1, pk1)
 
-	// Generate Keypair 2
-	sk2, pk2 := RandomKeyPair()
+	// // Generate Keypair 2
+	// sk2, pk2 := RandomKeyPair()
+
+	// -------------ECDSA------------------ //
+	// Generate ECDSA key pair
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		fmt.Printf("Error generating ECDSA key pair: %s\n", err)
+		return
+	}
+	fmt.Printf("Original ECDSA private key: %v\n", privateKey.D.String())
+	// Convert ECDSA privKey to EdDSA privKey
+	eddPrivKey := convKey(privateKey.D)
+	eddPublicKey := curve.Point().Mul(eddPrivKey, g)
+	fmt.Printf("Key pair 2: %v %v\n", eddPrivKey, eddPublicKey)
+	// ------------------------------------ //
 
 	// Aggregate public keys
-	aggPubKey := curve.Point().Add(pk1, pk2)
+	aggPubKey := curve.Point().Add(pk1, eddPublicKey)
 
 	// Create the hash with aggregated Public Key
 	// TODO: This way it is vulnerable to rogue-key. Add r in hash.
 	h := Hash(message + aggPubKey.String())
-
+	fmt.Printf("\n------------- Signature generation -------------\n")
 	// Generate signatures
+	fmt.Println("Signing message with key pair 1...")
 	sig1 := Sign(h, sk1)
-	sig2 := Sign(h, sk2)
-
+	fmt.Println("Signature 1: ", sig1)
+	fmt.Println("Signing message with key pair 2...")
+	sig2 := Sign(h, eddPrivKey)
+	fmt.Println("Signature 2: ", sig2)
+	fmt.Printf("\n------------- Signature validation -------------\n")
 	// Verify partial signatures
-	if !Verify(h, sig1, pk1) && !Verify(h, sig2, pk2) {
+	fmt.Println("Checking signatures...")
+	if !Verify(h, sig1, pk1) && !Verify(h, sig2, eddPublicKey) {
 		fmt.Println("Failed verifying partial signatures!")
 		return
 	} else {
 		fmt.Println("Success verifying partial signatures!")
 	}
-
+	fmt.Printf("\n------------- Multi-signature generation -------------\n")
 	// Multi-signature construction
-	mulSig, aggPubKey := mulSig(sig1, sig2, pk1, pk2)
-
+	fmt.Println("Aggregating keys and signatures with musig...")
+	mulSig, aggPubKey := mulSig(sig1, sig2, pk1, eddPublicKey)
+	fmt.Printf("\n------------- Multi-signature validation -------------\n")
 	// validate aggregated signature
+	fmt.Println("Validating aggregated keys and signatures...")
 	if !Verify(h, mulSig, aggPubKey) {
 		fmt.Println("Failed verifying aggregated signature!")
 		return
@@ -127,9 +165,10 @@ func main() {
 	}
 
 	// Debug
-	fmt.Println("Message: ", message)
-	fmt.Println("Sig1   : ", sig1)
-	fmt.Println("Sig2   : ", sig2)
-	fmt.Println("MulSig : ", mulSig)
-	fmt.Println("AggPubK: ", aggPubKey)
+	// fmt.Println("Message: ", message)
+	// fmt.Println("Sig1   : ", sig1)
+	// fmt.Println("Sig2   : ", sig2)
+	fmt.Printf("\n------------- Output -------------\n")
+	fmt.Println("Multi-signature : ", mulSig)
+	fmt.Println("Aggregated Keys : ", aggPubKey)
 }
