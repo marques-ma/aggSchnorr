@@ -112,7 +112,7 @@ func main() {
 
 	fmt.Printf("\n------------- Create Token1 -------------\n")
 	// Create dummy Token1
-	payload1 := "Payload of token 1"
+	payload1 := pk1.String()
 	fmt.Println("Payload 1  : ", payload1)
 	h := Hash(pk1.String() + payload1)
 	fmt.Printf("\n------------- Signature generation -------------\n")
@@ -131,27 +131,25 @@ func main() {
 	// calculate pubkey from sig1.S
 	calcPkS1 := curve.Point().Mul(sig1.S, g)
 	combinedPk := curve.Point().Add(calcPkS1, pk2)
-	fmt.Println("combined pk (sig1.s * g + sk2): ", combinedPk)
-
+	fmt.Println("combined pk (sig1.s * g + pk2): ", combinedPk)
 
 	fmt.Printf("\n------------- Create Token2 -------------\n")
 	// Create dummy Token2
-	payload2 := payload1 + ". Appended informations in token2"
+
+	// OBS: Abaixo, sig1.R está incluso no payload pois é o que sobra da assinatura, após usar o sig1.s. A minha dúvida é se
+	// devemos incluir no hash também, como feito em h2. O fato de já estar incluso no payload não torna desnecessário incluir no hash?
+	payload2 := payload1 + "." + sig1.R.String()  + calcPkS1.String() + "."  + pk2.String()
 	fmt.Println("Payload 2  : ", payload2)
+
+
 	h2 := Hash(combinedPk.String() + payload2 + payload1 + sig1.R.String())
 	fmt.Printf("\n------------- Signature generation -------------\n")
 	fmt.Println("Signing payload2 with combined private key (sig1.s + sk2)...")
 	sig2 := Sign(h2, combinedSk)
 	fmt.Println("Signature 2: ", sig2)
 
-
-	// Failure test
-	payload3 := payload2 + ". Appended informations in token2"
-	fmt.Println("Payload 3  : ", payload3)
-	h3 := Hash(combinedPk.String() + payload1 + payload2 + sig1.R.String()) 
-
 	fmt.Printf("\n------------- Validation -------------\n")
-	fmt.Println("Validating signature 2 with aggregated key...")
+	fmt.Println("Validating signature 2 with combined pk (sig1.s * g + pk2)...")
 	if !Verify(h2, sig2, combinedPk) {
 		fmt.Println("Failed verifying aggregated signature!")
 		return
@@ -159,7 +157,12 @@ func main() {
 		fmt.Println("Success verifying aggregated signature!")
 	}
 
-	fmt.Printf("\n------ Validation with wrong key --------\n")
+	// Failure test //
+	// wrongpayload := payload1 + ". Different payload value"
+	// fmt.Println("Payload 3  : ", wrongpayload)
+	h3 := Hash(combinedPk.String() + payload1 + payload2 + sig1.R.String()) 
+
+	fmt.Printf("\n------ Testing validation with wrong key --------\n")
 	fmt.Println("Validating signature 2 with wrong key...")
 	if !Verify(h3, sig2, calcPkS1) {
 		fmt.Println("Failed verifying aggregated signature!")
@@ -167,6 +170,7 @@ func main() {
 	} else {
 		fmt.Println("Success verifying aggregated signature!")
 	}
+	// //
 
 }
 
