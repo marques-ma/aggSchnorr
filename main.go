@@ -5,13 +5,13 @@ import (
 	"go.dedis.ch/kyber/v3"
 	"go.dedis.ch/kyber/v3/group/edwards25519"
 
-	"crypto/ecdsa"
-	"crypto/rand"
-	"crypto/elliptic"
+	// "crypto/ecdsa"
+	// "crypto/rand"
+	// "crypto/elliptic"
 	"math/big"
 )
 
-// Set parameters
+// Set global parameters
 var (
 	curve = edwards25519.NewBlakeSHA256Ed25519()
 	sha256 = curve.Hash()
@@ -60,6 +60,24 @@ func Verify(m kyber.Scalar , S Signature, y kyber.Point) bool {
     return sG.Equal(sGv)
 }
 
+// ------------------------------------ //
+// Generate a multi-signature given 2 signatures and the corresponding public keys
+func mulSig(sigA, sigB Signature, pubKeyA, pubKeyB kyber.Point) (Signature, kyber.Point) {
+	newR := curve.Point().Add(sigA.R, sigB.R)
+	newS := curve.Scalar().Add(sigA.S, sigB.S)
+	newPubKey := curve.Point().Add(pubKeyA, pubKeyB)
+	// fmt.Println("Aggregated publicKey in aggSig: ", newPubKey)
+
+	var sigC Signature
+	sigC = Signature{
+		R: newR,
+		S: newS,
+	}
+
+	return sigC, newPubKey
+}
+
+// --- Helper functions --- //
 // Return a new random key pair
 func RandomKeyPair() (kyber.Scalar, kyber.Point){
 
@@ -85,90 +103,87 @@ func convKey(d *big.Int) kyber.Scalar {
     return curve.Scalar().SetBytes(sha256.Sum(nil))
 }
 
-// ------------------------------------ //
-// Generate a multi-signature given 2 signatures and the corresponding public keys
-func mulSig(sigA, sigB Signature, pubKeyA, pubKeyB kyber.Point) (Signature, kyber.Point) {
-	newR := curve.Point().Add(sigA.R, sigB.R)
-	newS := curve.Scalar().Add(sigA.S, sigB.S)
-	newPubKey := curve.Point().Add(pubKeyA, pubKeyB)
-	// fmt.Println("Aggregated publicKey in aggSig: ", newPubKey)
-
-	var sigC Signature
-	sigC = Signature{
-		R: newR,
-		S: newS,
-	}
-
-	return sigC, newPubKey
-}
-
 func main() {
-	message := "message-2b-signed"
-	fmt.Println("Message: ", message)
-	fmt.Printf("\n------------- Key generation -------------\n")
-	// Generate EdDSA Keypair
+
+	fmt.Printf("\n------------- Key1 generation -------------\n")
+	// Generate EdDSA Keypair 1
 	sk1, pk1 := RandomKeyPair()
 	fmt.Printf("key pair 1: %v %v\n", sk1, pk1)
 
-	// // Generate Keypair 2
-	// sk2, pk2 := RandomKeyPair()
-
-	// -------------ECDSA------------------ //
-	// Generate ECDSA key pair
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		fmt.Printf("Error generating ECDSA key pair: %s\n", err)
-		return
-	}
-	fmt.Printf("Original ECDSA private key: %v\n", privateKey.D.String())
-	// Convert ECDSA privKey to EdDSA privKey
-	eddPrivKey := convKey(privateKey.D)
-	eddPublicKey := curve.Point().Mul(eddPrivKey, g)
-	fmt.Printf("Key pair 2: %v %v\n", eddPrivKey, eddPublicKey)
-	// ------------------------------------ //
-
-	// Aggregate public keys
-	aggPubKey := curve.Point().Add(pk1, eddPublicKey)
-
-	// Create the hash with aggregated Public Key
-	// TODO: This way it is vulnerable to rogue-key. Add r in hash.
-	h := Hash(message + aggPubKey.String())
+	fmt.Printf("\n------------- Create Token1 -------------\n")
+	// Create dummy Token1
+	payload1 := "Payload of token 1"
+	fmt.Println("Payload 1  : ", payload1)
+	h := Hash(pk1.String() + payload1)
 	fmt.Printf("\n------------- Signature generation -------------\n")
-	// Generate signatures
-	fmt.Println("Signing message with key pair 1...")
+	fmt.Println("Signing payload1 with key pair 1...")
 	sig1 := Sign(h, sk1)
 	fmt.Println("Signature 1: ", sig1)
-	fmt.Println("Signing message with key pair 2...")
-	sig2 := Sign(h, eddPrivKey)
+
+	fmt.Printf("\n------------- Key2 generation -------------\n")
+	// Generate EdDSA Keypair 2
+	sk2, pk2 := RandomKeyPair()
+	fmt.Printf("key pair 2: %v %v\n", sk2, pk2)
+
+	// Extract s part from sig1 and create new private key
+	combinedSk := curve.Scalar().Add(sig1.S, sk2)
+	fmt.Println("combined sk (sig1.s + sk2)    : ", combinedSk)
+	// calculate pubkey from sig1.S
+	calcPkS1 := curve.Point().Mul(sig1.S, g)
+	combinedPk := curve.Point().Add(calcPkS1, pk2)
+	fmt.Println("combined pk (sig1.s * g + sk2): ", combinedPk)
+
+
+	fmt.Printf("\n------------- Create Token2 -------------\n")
+	// Create dummy Token2
+	payload2 := payload1 + ". Appended informations in token2"
+	fmt.Println("Payload 2  : ", payload2)
+	h2 := Hash(combinedPk.String() + payload2 + payload1 + sig1.R.String())
+	fmt.Printf("\n------------- Signature generation -------------\n")
+	fmt.Println("Signing payload2 with combined private key (sig1.s + sk2)...")
+	sig2 := Sign(h2, combinedSk)
 	fmt.Println("Signature 2: ", sig2)
-	fmt.Printf("\n------------- Signature validation -------------\n")
-	// Verify partial signatures
-	fmt.Println("Checking signatures...")
-	if !Verify(h, sig1, pk1) && !Verify(h, sig2, eddPublicKey) {
-		fmt.Println("Failed verifying partial signatures!")
-		return
-	} else {
-		fmt.Println("Success verifying partial signatures!")
-	}
-	fmt.Printf("\n------------- Multi-signature generation -------------\n")
-	// Multi-signature construction
-	fmt.Println("Aggregating keys and signatures with musig...")
-	mulSig, aggPubKey := mulSig(sig1, sig2, pk1, eddPublicKey)
-	fmt.Printf("\n------------- Multi-signature validation -------------\n")
-	// validate aggregated signature
-	fmt.Println("Validating aggregated keys and signatures...")
-	if !Verify(h, mulSig, aggPubKey) {
+
+
+	// Failure test
+	payload3 := payload2 + ". Appended informations in token2"
+	fmt.Println("Payload 3  : ", payload3)
+	h3 := Hash(combinedPk.String() + payload1 + payload2 + sig1.R.String()) 
+
+	fmt.Printf("\n------------- Validation -------------\n")
+	fmt.Println("Validating signature 2 with aggregated key...")
+	if !Verify(h2, sig2, combinedPk) {
 		fmt.Println("Failed verifying aggregated signature!")
 		return
 	} else {
-		fmt.Println("Success verifying aggregated signatures!")
+		fmt.Println("Success verifying aggregated signature!")
 	}
 
-	// Debug
-	// fmt.Println("Message: ", message)
-	// fmt.Println("Sig1   : ", sig1)
-	// fmt.Println("Sig2   : ", sig2)
-	fmt.Printf("\n------------- Output -------------\n")
-	fmt.Println("Multi-signature : ", mulSig)
-	fmt.Println("Aggregated Keys : ", aggPubKey)
+	fmt.Printf("\n------ Validation with wrong key --------\n")
+	fmt.Println("Validating signature 2 with wrong key...")
+	if !Verify(h3, sig2, calcPkS1) {
+		fmt.Println("Failed verifying aggregated signature!")
+		return
+	} else {
+		fmt.Println("Success verifying aggregated signature!")
+	}
+
 }
+
+// agora esquema é pegar multisig.S e usar como sk para gerar nova sig. Lembrar q a msg q assinamos aqui é msg2 = message + multisig.R.
+// em seguida, gerar mais uma sig de msg2 usando uma chave privada (pode ser key2)
+//  por fim, agregar ambas. 
+
+//  Como funcionaria validacao aqui? Usamos parte de uma sig para gerar chave da proxima, e agregamos as pk. 
+
+// Gera par de chave 
+// Gera primeiro token: T1 = (P1 + S1)
+// Extrai s de S1
+// gera sk2 = s + sk (soma s com chave privada do usuario)
+// assina P2 (P1 + S1.R) com sk2
+// T2 = P2 + S2
+
+// Validação:
+//Penso em duas possibilidades: Tn ja possui a chave pública pkn para validar Tn. Então a validacao pode ser simplesmente uma validacao comum
+// Parece mais sensato reconstruir as chaves públicas: cada nova "camada (i.e. novas claims e assinatura)" traz a chave publica do Schoco.
+// O validador pega a chave pública que está nno token, combina com a do usuario que está no LSVID e usa para validar a assinatura.
